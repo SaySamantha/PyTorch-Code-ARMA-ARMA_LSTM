@@ -49,11 +49,11 @@ if __name__ == '__main__':
         min_lr = 1e-5,
         factor = 0.5,
         patience = 10,
-        epochs = 3,
+        epochs = 100,
         
         # Set-up
         nworkers = 1,
-        nruns = 1,
+        nruns = 5,
         log_every = 20,
         use_amp = False, #CHANGED THIS PART, NOT USING GPU
     )
