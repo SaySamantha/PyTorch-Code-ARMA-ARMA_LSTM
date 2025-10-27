@@ -49,11 +49,11 @@ if __name__ == '__main__':
         min_lr = 1e-5,
         factor = 0.5,
         patience = 10,
-        epochs = 100,
+        epochs = 3,
         
         # Set-up
         nworkers = 1,
-        nruns = 5,
+        nruns = 1,
         log_every = 20,
         use_amp = False, #CHANGED THIS PART, NOT USING GPU
     )
@@ -134,14 +134,12 @@ if __name__ == '__main__':
             val_pred = arma_fit.predict(start=len(train_dataset.targets), end=len(train_dataset.targets)+len(val_series)-1)
             _, val_y_resid = create_lstm_targets_from_residuals(val_series - val_pred, hyperparams.sequence_length)
             # ignore the x_resid returned by create_lstm_targets
-            val_dataset.features = val_dataset.features[:val_y_resid.shape[0]]
             val_dataset.targets = val_y_resid
 
             # FIT THEN GET RESIDUALS TO SERVE AS TEST DATA FOR LSTM
             test_series = test_dataset.targets.numpy().flatten()
             test_pred = arma_fit.predict(start=len(train_dataset.targets) + len(val_series), end=len(train_dataset.targets)+len(val_series)+len(test_series)-1)
             _, test_y_resid = create_lstm_targets_from_residuals(test_series - test_pred, hyperparams.sequence_length)
-            test_dataset.features = test_dataset.features[:test_y_resid.shape[0]]
             test_dataset.targets = test_y_resid
 
             # SAVE THE DATA
