@@ -26,9 +26,8 @@ def create_lstm_targets_from_residuals(resid, seq_len):
 
     for i in range(len(resid) - seq_len): # sliding window, create seq
         seq = resid[i:i+seq_len]
-        if len(seq) == seq_len:  # skip short sequences, should be equal but jic
-            x_resid.append(seq) # the seq
-            y_resid.append(resid[i+seq_len]) # the next value after the seq
+        x_resid.append(seq) # the seq
+        y_resid.append(resid[i+seq_len]) # the next value after the seq
 
     # need 3D so add #of features = 1
     x_resid = torch.tensor(np.array(x_resid), dtype=torch.float32).unsqueeze(-1)
@@ -50,11 +49,11 @@ if __name__ == '__main__':
         min_lr = 1e-5,
         factor = 0.5,
         patience = 10,
-        epochs = 100,
+        epochs = 3,
         
         # Set-up
         nworkers = 1,
-        nruns = 5,
+        nruns = 1,
         log_every = 20,
         use_amp = False, #CHANGED THIS PART, NOT USING GPU
     )
@@ -128,7 +127,6 @@ if __name__ == '__main__':
             # make sequences with this length; function returns x and Y
 
             # SET UP TRAINING SET FOR LSTM
-            train_dataset.features = train_dataset.features[:train_y_resid.shape[0]] # remove those that don't form full sequences
             train_dataset.targets = train_y_resid # we want to predict the next residual
 
             # FIT THEN GET RESIDUALS TO SERVE AS VAL DATA FOR LSTM
@@ -163,7 +161,7 @@ if __name__ == '__main__':
             # ------------------- THE REST OF LSTM STEP HERE -------------------
 
             # CHANGED NUM_WORKERS=HYPERPARAMS.NWORKERS TO DROP_LAST; USING MAC
-            train_loader = DataLoader(train_dataset, batch_size=hyperparams.batch_size, shuffle=True, drop_last=True) 
+            train_loader = DataLoader(train_dataset, batch_size=hyperparams.batch_size, shuffle=True, drop_last=False) 
             # last batch has to be of the same len for training stability
             val_loader = DataLoader(val_dataset, batch_size=hyperparams.batch_size, shuffle=False, drop_last=False) 
             # ok even if last batch is smaller
