@@ -62,6 +62,13 @@ for diff in df['Forecast_Diff'].values:
 
 df['Forecast_Log'] = forecast_log
 
+# Residuals = actual diff - forecast diff
+residuals = df['Test_Log'] - df['Forecast_Diff'].values
+
+np.save("test_resid.npy", residuals)
+np.save("forecast_diff.npy", df['Forecast_Diff'].values)
+np.save("test_log.npy", df['Test_Log'].values)
+
 mae = mean_absolute_error(df['Forecast_Log'], df['Test_Log'])
 rmse = np.sqrt(mean_squared_error(df['Forecast_Log'], df['Test_Log']))
 
