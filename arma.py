@@ -24,45 +24,53 @@ test_diff  = test_data['log_diff_volume'].dropna().values
 train_series = pd.Series(train_diff, index=pd.RangeIndex(len(train_diff)))
 test_series  = pd.Series(test_diff, index=pd.RangeIndex(start=len(train_series), stop=len(train_series) + len(test_diff)))
 
-# Starting log value from original full series before test period
-log_start = train_val_data['log_volume'].iloc[-1]  # ✅ last log before test
+# Last known log value before test period
+log_start = train_val_data['log_volume'].iloc[-1]
 print(f"[INFO] log_start: {log_start:.6f}")
 
 model = ARIMA(train_series, order=(1, 0, 2))
 model_fit = model.fit()
 
-rolling_forecasts = []
-updated_model = model_fit
-
-# Append actual test data as if model gets new data every step
+# Append actual test series to model for rolling predict
 test_series_aligned = pd.Series(
     test_series.values,
     index=pd.RangeIndex(start=len(train_series), stop=len(train_series) + len(test_series))
 )
-
 updated_model = model_fit.append(test_series_aligned)
-rolling_forecasts_series = updated_model.predict(
+
+forecast_series = updated_model.predict(
     start=len(train_series),
     end=len(train_series) + len(test_series) - 1
 )
-
-forecast = rolling_forecasts_series.values
-forecast = np.nan_to_num(forecast, nan=0.0)
+forecast = np.nan_to_num(forecast_series.values, nan=0.0)
 
 df = pd.DataFrame({
     'Test_Diff': test_diff,
     'Forecast_Diff': forecast
 }, index=pd.RangeIndex(len(test_diff)))
 
-# Directly use the real test log values
+# Use the real test log values
 df['Test_Log'] = test_data['log_volume'].reset_index(drop=True)
 
-# Forecast logs: previous actual + forecasted diff
-df['Forecast_Log'] = df['Test_Log'].shift(1) + df['Forecast_Diff']
-df.loc[0, 'Forecast_Log'] = log_start + df.loc[0, 'Forecast_Diff']
+# Forecast log: previous actual log + forecasted diff
+forecast_log = []
+prev_log = log_start
+for diff in df['Forecast_Diff'].values:
+    next_log = prev_log + diff
+    forecast_log.append(next_log)
+    prev_log = df['Test_Log'].iloc[len(forecast_log)-1]  # always use actual test log as prev
 
-mae = mean_absolute_error(df["Forecast_Log"], df["Test_Log"])
-rmse = np.sqrt(mean_squared_error(df["Forecast_Log"], df["Test_Log"]))
+df['Forecast_Log'] = forecast_log
+
+# Residuals = actual diff - forecast diff
+residuals = df['Test_Log'] - df['Forecast_Diff'].values
+
+np.save("test_resid.npy", residuals)
+np.save("forecast_diff.npy", df['Forecast_Diff'].values)
+np.save("test_log.npy", df['Test_Log'].values)
+
+mae = mean_absolute_error(df['Forecast_Log'], df['Test_Log'])
+rmse = np.sqrt(mean_squared_error(df['Forecast_Log'], df['Test_Log']))
 
 print(f"\n[INFO] Log MAE: {mae:.6f}")
 print(f"[INFO] Log RMSE: {rmse:.6f}")
