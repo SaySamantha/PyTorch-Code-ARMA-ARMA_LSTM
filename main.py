@@ -14,25 +14,27 @@ from statsmodels.tsa.stattools import adfuller
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 import pandas as pd
+from torch.utils.data import Dataset
+from pipeline.armadata import ARMAVolumeDataset
 
 from pipeline.model import LSTMModel
-from pipeline.data import VolumeDataset
 from pipeline.utils import Hyperparameter, set_seed
 
-# ADDED: CONVERT ARMA RESIDUALS TO SEQ FOR LSTM TARGET; KEEP ONLY SEQ OF LN (SEQ_LEN)
-def create_lstm_targets_from_residuals(resid, seq_len):
-    resid = np.array(resid).flatten() # just ensure 1D list 
-    x_resid, y_resid = [], []
-
-    for i in range(len(resid) - seq_len): # sliding window, create seq
-        seq = resid[i:i+seq_len]
-        x_resid.append(seq) # the seq
-        y_resid.append(resid[i+seq_len]) # the next value after the seq
-
-    # need 3D so add #of features = 1
-    x_resid = torch.tensor(np.array(x_resid), dtype=torch.float32).unsqueeze(-1)
-    y_resid = torch.tensor(np.array(y_resid), dtype=torch.float32).unsqueeze(-1)
-    return x_resid, y_resid
+class ResidualVolumeDataset(Dataset):
+    def __init__(self, residuals, sequence_length):
+        self.sequence_length = sequence_length
+        self.residuals = np.array(residuals).flatten()
+        self.features = []
+        self.targets = []
+        for i in range(len(self.residuals) - sequence_length):
+            self.features.append(self.residuals[i:i+sequence_length])
+            self.targets.append(self.residuals[i+sequence_length])
+        self.features = torch.tensor(np.array(self.features), dtype=torch.float32).unsqueeze(-1)
+        self.targets = torch.tensor(np.array(self.targets), dtype=torch.float32).unsqueeze(-1)
+    def __getitem__(self, idx):
+        return self.features[idx], self.targets[idx]
+    def __len__(self):
+        return len(self.features)
 
 if __name__ == '__main__':
     # Specify hyperparameters
@@ -49,7 +51,7 @@ if __name__ == '__main__':
         min_lr = 1e-5,
         factor = 0.5,
         patience = 10,
-        epochs = 3,
+        epochs = 10,
         
         # Set-up
         nworkers = 1,
@@ -85,12 +87,14 @@ if __name__ == '__main__':
             set_seed(i)
 
             # Load dataset    
-            train_dataset = VolumeDataset(dt.datetime(2023,1,1), dt.datetime(2023,12,31), hyperparams.sequence_length)
-            val_dataset = VolumeDataset(dt.datetime(2024,1,1), dt.datetime(2024,6,30), hyperparams.sequence_length)
-            test_dataset = VolumeDataset(dt.datetime(2024,7,1), dt.datetime(2024,12,31), hyperparams.sequence_length)
+            train_arma_dataset = ARMAVolumeDataset(dt.datetime(2022,9,30), dt.datetime(2023,5,8))
+            val_arma_dataset   = ARMAVolumeDataset(dt.datetime(2023,5,9), dt.datetime(2023,7,19))
+            test_arma_dataset  = ARMAVolumeDataset(dt.datetime(2023,7,20), dt.datetime(2023,9,29))
 
             # ------------------- ARMA FORMALITIES HERE -------------------
-            train_series = pd.Series(train_dataset.targets.numpy().flatten()) # NUMPY -> 1D -> PANDAS SERIES
+            train_data = train_arma_dataset.process_data()
+            train_diff = train_data['log_diff_volume'].dropna().values
+            train_series = pd.Series(train_diff, index=pd.RangeIndex(len(train_diff)))
 
             result = adfuller(train_series)
             print('ADF Statistic:', result[0])
@@ -123,41 +127,62 @@ if __name__ == '__main__':
             arma_model = ARIMA(train_series, order=(1,0,2))
             arma_fit = arma_model.fit()
 
-            train_x_resid, train_y_resid = create_lstm_targets_from_residuals(arma_fit.resid.values, hyperparams.sequence_length) 
-            # make sequences with this length; function returns x and Y
+            # Keep full ARMA residuals first
+            train_resid_full = arma_fit.resid.values
 
-            # SET UP TRAINING SET FOR LSTM
-            train_dataset.targets = train_y_resid # we want to predict the next residual
+            # VAL residuals: actual - predicted using arma_fit
+            val_data = val_arma_dataset.process_data()
+            val_series = val_data['log_diff_volume'].dropna().values
+            val_series = pd.Series(val_series)
+            val_pred = arma_fit.predict(start=len(train_series), end=len(train_series)+len(val_series)-1)
+            val_pred = pd.Series(val_pred.values, index=val_series.index)
+            val_resid_full = val_series - val_pred
 
-            # FIT THEN GET RESIDUALS TO SERVE AS VAL DATA FOR LSTM
-            val_series = val_dataset.targets.numpy().flatten()
-            val_pred = arma_fit.predict(start=len(train_dataset.targets), end=len(train_dataset.targets)+len(val_series)-1)
-            _, val_y_resid = create_lstm_targets_from_residuals(val_series - val_pred, hyperparams.sequence_length)
-            # ignore the x_resid returned by create_lstm_targets
-            val_dataset.targets = val_y_resid
+            # TEST residuals: actual - predicted using arma_fit
+            test_data = test_arma_dataset.process_data()
+            test_series = test_data['log_diff_volume'].dropna().values
+            test_series = pd.Series(test_series)
 
-            # FIT THEN GET RESIDUALS TO SERVE AS TEST DATA FOR LSTM
-            test_series = test_dataset.targets.numpy().flatten()
-            test_pred = arma_fit.predict(start=len(train_dataset.targets) + len(val_series), end=len(train_dataset.targets)+len(val_series)+len(test_series)-1)
-            _, test_y_resid = create_lstm_targets_from_residuals(test_series - test_pred, hyperparams.sequence_length)
-            test_dataset.targets = test_y_resid
+            # --- TEST residuals: compute manually for unseen test data ---
+
+            # Forecast differences for the test period
+            forecast_diff = arma_fit.forecast(steps=len(test_series))  # one-step-ahead
+
+            # Compute forecast log using actual previous log values
+            log_start = 14.62308448145951 # HARD CODED IN THE MEANTIME, MANUALLY CHECKED THE DATASET
+            forecast_log = []
+            prev_log = 14.62308448145951  # hardcoded
+            for diff in forecast_diff:
+                next_log = prev_log + diff
+                forecast_log.append(next_log)
+                prev_log = next_log  # accumulate forecast sequentially
+
+            # Residuals = actual log - forecast log
+            test_resid_full = test_data['log_volume'].values - np.array(forecast_log)
+
+            # Save forecast for CSV
+            test_pred = np.array(forecast_log)
+
+            # Slice residuals for LSTM 60-20-20 split according to dataset dates
+            train_resid = train_resid_full                     # 60% train dates
+            val_resid   = val_resid_full                       # 20% val dates
+            test_resid  = test_resid_full                      # 20% test dates
+
+            # Now create datasets
+            train_dataset = ResidualVolumeDataset(train_resid, hyperparams.sequence_length)
+            val_dataset   = ResidualVolumeDataset(val_resid, hyperparams.sequence_length)
+            test_dataset  = ResidualVolumeDataset(test_resid, hyperparams.sequence_length)
 
             # SAVE THE DATA
-            np.save('train_series.npy', train_dataset.targets.numpy().flatten())
-            np.save('val_series.npy', val_dataset.targets.numpy().flatten())
-            np.save('test_series.npy', test_dataset.targets.numpy().flatten())
+            np.save('train_resid.npy', train_resid)
+            np.save('val_resid.npy', val_resid)
+            np.save('test_resid.npy', test_resid)
 
             np.save('train_arma_fitted.npy', arma_fit.fittedvalues.values)
             np.save('val_arma_pred.npy', val_pred)
             np.save('test_arma_pred.npy', test_pred)
 
-            np.save('train_resid.npy', arma_fit.resid.values)        # full ARMA residuals
-            np.save('train_resid_lstm.npy', train_y_resid.numpy().flatten())  # residuals as LSTM targets
-            np.save('val_resid_lstm.npy', val_y_resid.numpy().flatten())
-            np.save('test_resid_lstm.npy', test_y_resid.numpy().flatten())
-
             # ------------------- THE REST OF LSTM STEP HERE -------------------
-
             # CHANGED NUM_WORKERS=HYPERPARAMS.NWORKERS TO DROP_LAST; USING MAC
             train_loader = DataLoader(train_dataset, batch_size=hyperparams.batch_size, shuffle=True, drop_last=False) 
             # last batch has to be of the same len for training stability
@@ -166,8 +191,8 @@ if __name__ == '__main__':
             test_loader = DataLoader(test_dataset, batch_size=hyperparams.batch_size, shuffle=False, drop_last=False)
 
             # Extract input shapes
-            input_dim = train_dataset[0][0].shape[-1]
-            output_dim = train_dataset[0][1].shape[-1]
+            input_dim = train_dataset[0][0].shape[-1]  # should be 1
+            output_dim = train_dataset[0][1].shape[-1] # should be 1
             
             # Load model
             model = LSTMModel(input_dim, hyperparams.hidden_dim, output_dim, hyperparams.activation, 
@@ -218,3 +243,73 @@ if __name__ == '__main__':
     pprint(results)
     summarize_results = lambda metrics: {metric: f'{np.mean(values):.6f} ± {np.std(values):.6f}' for metric, values in metrics.items()}    
     pprint(summarize_results(results))
+
+    # ------------------- CREATE CSV OF TEST FORECASTS -------------------
+
+# Convert to arrays
+arma_forecast = np.array(test_pred)
+arma_residuals = np.array(test_resid_full)
+lstm_pred_residuals = np.array(test_data['predictions']).flatten()
+timestamps = test_arma_dataset.process_data()['timestamp'].reset_index(drop=True)
+
+# Align lengths in case of mismatch
+min_len = min(len(timestamps), len(arma_forecast), len(arma_residuals), len(lstm_pred_residuals))
+timestamps = timestamps[:min_len]
+arma_forecast = arma_forecast[:min_len]
+arma_residuals = arma_residuals[:min_len]
+lstm_pred_residuals = lstm_pred_residuals[:min_len]
+
+# ------------------- CREATE CSV OF TEST FORECASTS -------------------
+
+# Convert to arrays
+arma_forecast = np.array(forecast_log)                     # Forecasted log values
+arma_residuals = np.array(test_resid_full)                 # ARMA residuals (log_actual - log_forecast)
+test_processed = test_arma_dataset.process_data()
+test_diff = test_processed['log_diff_volume'].dropna().values   # Actual differenced logs
+test_log = test_processed['log_volume'].values[:len(forecast_log)]  # Actual log values
+timestamps = test_processed['timestamp'].reset_index(drop=True)
+forecast_diff = np.array(forecast_diff)                    # Forecasted differenced logs
+test_log = test_processed['log_volume'].values[:len(arma_forecast)]  # Actual log values
+forecast_log = np.array(forecast_log)                      # Already computed above
+lstm_pred_residuals = np.load('test_preds.npy').flatten()  # LSTM residual predictions
+
+timestamps = test_arma_dataset.process_data()['timestamp'].reset_index(drop=True)
+
+# Align lengths in case of mismatch
+min_len = min(
+    len(timestamps),
+    len(test_diff),
+    len(forecast_diff),
+    len(test_log),
+    len(forecast_log),
+    len(arma_forecast),
+    len(arma_residuals),
+    len(lstm_pred_residuals)
+)
+
+# Truncate to min length
+timestamps = timestamps[:min_len]
+test_diff = test_diff[:min_len]
+forecast_diff = forecast_diff[:min_len]
+test_log = test_log[:min_len]
+forecast_log = forecast_log[:min_len]
+arma_forecast = arma_forecast[:min_len]
+arma_residuals = arma_residuals[:min_len]
+lstm_pred_residuals = lstm_pred_residuals[:min_len]
+
+# Combine into DataFrame
+df_csv = pd.DataFrame({
+    'timestamp': timestamps,
+    'test_diff': test_diff,
+    'forecast_diff': forecast_diff,
+    'test_log': test_log,
+    'forecast_log': forecast_log,
+    'arma_forecast': arma_forecast,
+    'arma_residual': arma_residuals,
+    'lstm_pred_residual': lstm_pred_residuals
+})
+
+# Save CSV
+csv_path = 'test_forecast_analysis.csv'
+df_csv.to_csv(csv_path, index=False)
+print(f"[INFO] CSV saved: {csv_path}")
