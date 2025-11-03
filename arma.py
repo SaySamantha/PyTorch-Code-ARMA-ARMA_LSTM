@@ -9,7 +9,7 @@ from pipeline.armadata import ARMAVolumeDataset
 
 train_dataset = ARMAVolumeDataset(dt.datetime(2022, 9, 30), dt.datetime(2023, 5, 8))
 val_dataset   = ARMAVolumeDataset(dt.datetime(2023, 5, 9), dt.datetime(2023, 7, 19))
-test_dataset  = ARMAVolumeDataset(dt.datetime(2023, 7, 20), dt.datetime(2023, 9, 29))
+test_dataset  = ARMAVolumeDataset(dt.datetime(2023, 7, 20), dt.datetime(2023, 9, 30))
 
 train_data = train_dataset.process_data()
 val_data   = val_dataset.process_data()
@@ -65,15 +65,11 @@ df['Forecast_Log'] = forecast_log
 # Residuals = actual diff - forecast diff
 residuals = df['Test_Log'] - df['Forecast_Diff'].values
 
-np.save("test_resid.npy", residuals)
-np.save("forecast_diff.npy", df['Forecast_Diff'].values)
-np.save("test_log.npy", df['Test_Log'].values)
+mae_diff = mean_absolute_error(df['Test_Diff'], df['Forecast_Diff'])
+mse_diff = mean_squared_error(df['Test_Diff'], df['Forecast_Diff'])
 
-mae = mean_absolute_error(df['Forecast_Log'], df['Test_Log'])
-rmse = np.sqrt(mean_squared_error(df['Forecast_Log'], df['Test_Log']))
-
-print(f"\n[INFO] Log MAE: {mae:.6f}")
-print(f"[INFO] Log RMSE: {rmse:.6f}")
+print(f"\n[INFO] Log Diff MAE: {mae_diff:.6f}")
+print(f"[INFO] Log Diff MSE: {mse_diff:.6f}")
 
 plt.figure(figsize=(12, 6))
 plt.plot(df['Test_Log'], label='Actual Test Log', linewidth=2)
@@ -81,6 +77,17 @@ plt.plot(df['Forecast_Log'], label='Forecast Log', linestyle='--', linewidth=2)
 plt.xlabel("Index")
 plt.ylabel("Log Volume")
 plt.title("Test Data: Actual vs Forecasted Log Series")
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(12, 6))
+plt.plot(df['Test_Diff'], label='Actual Test Diff', linewidth=2)
+plt.plot(df['Forecast_Diff'], label='Forecast Diff', linestyle='--', linewidth=2)
+plt.xlabel("Index")
+plt.ylabel("Log Diff Volume")
+plt.title("Test Data: Actual vs Forecasted Log Differences")
 plt.legend()
 plt.grid(True, linestyle='--', alpha=0.6)
 plt.tight_layout()
