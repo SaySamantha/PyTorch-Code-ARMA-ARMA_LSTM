@@ -26,7 +26,9 @@ test_series  = pd.Series(test_diff, index=pd.RangeIndex(start=len(train_series),
 
 # Last known log value before test period
 log_start = train_val_data['log_volume'].iloc[-1]
-print(f"[INFO] log_start: {log_start:.6f}")
+log_start_time = train_val_data['timestamp'].iloc[-1]
+
+print(f"[INFO] log_start: {log_start:.6f} at {log_start_time}")
 
 model = ARIMA(train_series, order=(1, 0, 2))
 model_fit = model.fit()
@@ -61,6 +63,8 @@ for diff in df['Forecast_Diff'].values:
     prev_log = df['Test_Log'].iloc[len(forecast_log)-1]  # always use actual test log as prev
 
 df['Forecast_Log'] = forecast_log
+df['timestamp'] = test_data['timestamp'].reset_index(drop=True)
+df.set_index('timestamp', inplace=True)
 
 # Residuals = actual diff - forecast diff
 residuals = df['Test_Log'] - df['Forecast_Diff'].values
@@ -72,27 +76,30 @@ print(f"\n[INFO] Log Diff MAE: {mae_diff:.6f}")
 print(f"[INFO] Log Diff MSE: {mse_diff:.6f}")
 
 plt.figure(figsize=(12, 6))
-plt.plot(df['Test_Log'], label='Actual Test Log', linewidth=2)
-plt.plot(df['Forecast_Log'], label='Forecast Log', linestyle='--', linewidth=2)
-plt.xlabel("Index")
+plt.plot(df.index, df['Test_Log'], label='Actual Test Log', linewidth=2)
+plt.plot(df.index, df['Forecast_Log'], label='Forecast Log', linestyle='--', linewidth=2)
+plt.xlabel("Timestamp")
 plt.ylabel("Log Volume")
 plt.title("Test Data: Actual vs Forecasted Log Series")
 plt.legend()
 plt.grid(True, linestyle='--', alpha=0.6)
+plt.gcf().autofmt_xdate()  
 plt.tight_layout()
 plt.show()
 
 plt.figure(figsize=(12, 6))
-plt.plot(df['Test_Diff'], label='Actual Test Diff', linewidth=2)
-plt.plot(df['Forecast_Diff'], label='Forecast Diff', linestyle='--', linewidth=2)
-plt.xlabel("Index")
+plt.plot(df.index, df['Test_Diff'], label='Actual Test Diff', linewidth=2)
+plt.plot(df.index, df['Forecast_Diff'], label='Forecast Diff', linestyle='--', linewidth=2)
+plt.xlabel("Timestamp")
 plt.ylabel("Log Diff Volume")
 plt.title("Test Data: Actual vs Forecasted Log Differences")
 plt.legend()
 plt.grid(True, linestyle='--', alpha=0.6)
+plt.gcf().autofmt_xdate()
 plt.tight_layout()
 plt.show()
 
 save_path = os.path.abspath("arma_forecast_results.csv")
-df.to_csv(save_path, index=False)
+df.to_csv(save_path, index=True)
 print(f"[INFO] Saved full forecast results to: {save_path}")
+# double-checked alignment for both log_diff and log_vol; compared with original data from armadata
