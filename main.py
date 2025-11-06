@@ -5,6 +5,7 @@ import numpy as np
 from torch import nn
 import datetime as dt
 from torch.utils.data import DataLoader
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 from statsmodels.tsa.arima.model import ARIMA
 from torchinfo import summary
 import matplotlib.pyplot as plt
@@ -14,24 +15,36 @@ from pipeline.armadata import ARMAVolumeDataset
 from pipeline.train import run, evaluate
 from pipeline.model import LSTMModel
 from pipeline.utils import Hyperparameter, set_seed
+import torch
+import numpy as np
+import pandas as pd
+from torch.utils.data import Dataset
 
-class ResidualVolumeDataset(Dataset):
-    def __init__(self, residuals, sequence_length):
+class ResidualDataset(Dataset):
+    def __init__(self, df, start_date, end_date, sequence_length):
+        super(ResidualDataset, self).__init__()
         self.sequence_length = sequence_length
-        self.residuals = np.array(residuals).flatten() # ensures 1D residuals
-        self.features = []
-        self.targets = []
-        for i in range(len(self.residuals) - sequence_length): # sliding window to store seq, targets
-            self.features.append(self.residuals[i:i+sequence_length])
-            self.targets.append(self.residuals[i+sequence_length])
-        # current features shape is (num of seq, seq len), unsqueeze(-1) to indicate input size is 1
-        # current targets shape is (num of targets), unsqueeze(-1) to indicate input size is 1
-        self.features = torch.tensor(np.array(self.features), dtype=torch.float32).unsqueeze(-1)
-        self.targets = torch.tensor(np.array(self.targets), dtype=torch.float32).unsqueeze(-1)
-    def __getitem__(self, idx): # idx for index
-        return self.features[idx], self.targets[idx]
+        processed_data = df.loc[start_date:end_date]
+
+        self.index = processed_data.index.values.astype(int)
+        self.features = processed_data[['log_diff_volume','log_return','relative_open','relative_high','relative_low','relative_close']].values
+        self.targets = processed_data[['residual']].values
+
+        self.index = torch.from_numpy(self.index).long()
+        self.features = torch.from_numpy(self.features).float()
+        self.targets = torch.from_numpy(self.targets).float()
+
+    def __getitem__(self, i):
+        return self.features[i : (i + self.sequence_length)], self.targets[i + self.sequence_length]
+
     def __len__(self):
-        return len(self.features)
+        return self.targets.shape[0] - (self.sequence_length + 1)
+
+    def get_index(self, i):
+        return (self.index[i : (i + self.sequence_length)],self.index[i + self.sequence_length])
+
+    def index_to_datetime(self, index):
+        return pd.to_datetime(index.numpy(), unit='ns')
 
 if __name__ == '__main__':
     # Specify hyperparameters
@@ -48,11 +61,11 @@ if __name__ == '__main__':
         min_lr = 1e-5,
         factor = 0.5,
         patience = 10,
-        epochs = 5,
+        epochs = 100,
         
         # Set-up
         nworkers = 1,
-        nruns = 1,
+        nruns = 5,
         log_every = 20,
         use_amp = False, #CHANGED THIS PART, NOT USING GPU
     )
@@ -118,13 +131,28 @@ if __name__ == '__main__':
             # Prepare LSTM input (prepend last sequence_length residuals from val)
             test_lstm_input = np.concatenate([val_resid_full[-hyperparams.sequence_length:], test_resid_full])
 
-            # Call ResidualVolumeDataset we see above
-            train_dataset = ResidualVolumeDataset(train_resid_full, hyperparams.sequence_length)
-            val_dataset   = ResidualVolumeDataset(val_resid_full, hyperparams.sequence_length)
-            test_dataset  = ResidualVolumeDataset(test_lstm_input, hyperparams.sequence_length)
-            
+            # Add residuals into the same processed_data DataFrame
+            train_data['residual'] = train_resid_full
+            val_data['residual']   = val_resid_full
+            test_data['residual']  = test_resid_full
+
+            corr = train_data[['log_diff_volume','log_return','relative_open','relative_high','relative_low','relative_close','residual']].corr()['residual']
+            print("[DEBUG] Correlation of residual with features:")
+            print(corr)
+
+            temp_dataset = ResidualDataset(train_data, dt.datetime(2022,9,30), dt.datetime(2023,5,8), hyperparams.sequence_length)
+            sample_features, sample_target = temp_dataset[0]
+            print(f"[DEBUG] Sample feature shape: {sample_features.shape}")
+            print(f"[DEBUG] Sample target shape: {sample_target.shape}")
+            print(f"[DEBUG] Planned input_dim = {sample_features.shape[-1]}")
+
+            # Create datasets with full DataFrames (features + residuals)
+            train_dataset = ResidualDataset(train_data, dt.datetime(2022,9,30), dt.datetime(2023,5,8), hyperparams.sequence_length)
+            val_dataset   = ResidualDataset(val_data, dt.datetime(2023,5,9), dt.datetime(2023,7,19), hyperparams.sequence_length)
+            test_dataset  = ResidualDataset(test_data, dt.datetime(2023,7,20), dt.datetime(2023,9,30), hyperparams.sequence_length)
+
             # ------------------- THE REST OF LSTM STEP HERE -------------------
-            # CHANGED NUM_WORKERS=HYPERPARAMS.NWORKERS TO DROP_LAST; USING MAC
+            # CHANGED NUM_WORKERS=HYPERPARAMS.NWORKERS TO DROP_LAST; ISSUES W MAC
             train_loader = DataLoader(train_dataset, batch_size=hyperparams.batch_size, shuffle=True, drop_last=False) 
             val_loader = DataLoader(val_dataset, batch_size=hyperparams.batch_size, shuffle=False, drop_last=False) 
             test_loader = DataLoader(test_dataset, batch_size=hyperparams.batch_size, shuffle=False, drop_last=False)
@@ -204,38 +232,39 @@ df_hybrid = pd.DataFrame({
 df_hybrid.to_csv('test_forecast_analysis.csv', index=False)
 print(f"[INFO] CSV saved successfully to test_forecast_analysis.csv")
 
-# ------------------- PLOT RESULTS -------------------
+# ------------------- PLOT RESULTS (with timestamps) -------------------
 plt.figure(figsize=(12, 6))
-plt.plot(range(len(test_diff)), test_diff, label='Actual Test Diff', color='blue')
-plt.plot(range(len(test_diff)), arma_test_pred, label='ARMA Forecast', color='red', linestyle='--')
+plt.plot(timestamps, test_diff, label='Actual Test Diff', color='blue')
+plt.plot(timestamps, arma_test_pred, label='ARMA Forecast', color='red', linestyle='--')
 plt.title('ARMA Forecast vs Actual Test')
-plt.xlabel('Time')
+plt.xlabel('Timestamp')
 plt.ylabel('Log Diff Volume')
 plt.legend()
-plt.grid(True)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.tight_layout()
 plt.show()
 
 plt.figure(figsize=(12, 6))
-plt.plot(range(len(test_diff)), arma_test_resid, label='Actual Residuals', color='blue')
-plt.plot(range(len(test_diff)), lstm_pred_residuals, label='LSTM Predicted Residuals', color='green', linestyle='--')
+plt.plot(timestamps, arma_test_resid, label='Actual Residuals', color='blue')
+plt.plot(timestamps, lstm_pred_residuals, label='LSTM Predicted Residuals', color='green', linestyle='--')
 plt.title('LSTM Predicted Residuals vs Actual Residuals')
-plt.xlabel('Time')
+plt.xlabel('Timestamp')
 plt.ylabel('Residuals')
 plt.legend()
-plt.grid(True)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.tight_layout()
 plt.show()
 
 plt.figure(figsize=(12, 6))
-plt.plot(range(len(test_diff)), test_diff, label='Actual Test Diff', color='blue')
-plt.plot(range(len(test_diff)), hybrid_forecast_diff, label='Hybrid Forecast', color='purple', linestyle='--')
+plt.plot(timestamps, test_diff, label='Actual Test Diff', color='blue')
+plt.plot(timestamps, hybrid_forecast_diff, label='Hybrid Forecast', color='purple', linestyle='--')
 plt.title('Hybrid Forecast vs Actual Test')
-plt.xlabel('Time')
+plt.xlabel('Timestamp')
 plt.ylabel('Log Diff Volume')
 plt.legend()
-plt.grid(True)
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.tight_layout()
 plt.show()
-
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 # Compute errors
 arma_mae = mean_absolute_error(test_diff, arma_test_pred)
