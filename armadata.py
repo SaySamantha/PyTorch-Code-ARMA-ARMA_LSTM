@@ -41,8 +41,12 @@ class ARMAVolumeDataset:
         raw_data['relative_close'] = raw_data['close'] / raw_data['mid_price']
         raw_data['log_volume'] = np.log(raw_data['volume'])
 
+        # EDITED SINCE SHOWING 7/18 AS FINAL VAL DATE, not 7/19
         # Filter raw_data and select the datetime index, features, and targets
-        processed_data = raw_data.dropna().loc[self.start_date : self.end_date]
+        processed_data = raw_data.dropna().loc[
+            self.start_date : pd.to_datetime(self.end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        ]
+
         # index = processed_data.index.values.astype(int)
         index = processed_data.index
         features = processed_data[['log_diff_volume', 'log_return', 'relative_open', 'relative_high', 'relative_low', 'relative_close']].values
@@ -64,7 +68,7 @@ class ARMAVolumeDataset:
         })
     
 # This file will get overwritten later by the test dataset when the ARMAVolumeDataset is called
-# Created to check that log_volume and log_diff_volume are correct
+# Created check that log_volume and log_diff_volume are correct
 if __name__ == "__main__":
     dataset = ARMAVolumeDataset(start_date='2022-09-30', end_date='2023-09-30')
     processed = dataset.process_data()
