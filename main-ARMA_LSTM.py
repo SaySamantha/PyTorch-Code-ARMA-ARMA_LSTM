@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 
+# Followed the logic of the original main.py for LSTM minus raw data processing
 class ResidualDataset(Dataset):
     def __init__(self, df, start_date, end_date, sequence_length):
         super(ResidualDataset, self).__init__()
@@ -111,6 +112,7 @@ if __name__ == '__main__':
             val_series = pd.Series(val_diff, index=pd.RangeIndex(start=len(train_diff), stop=len(train_diff) + len(val_diff)))
             test_series  = pd.Series(test_diff, index=pd.RangeIndex(start=len(val_diff), stop=len(val_diff) + len(test_diff)))
 
+            # Already did pacf, acf before
             arma_model = ARIMA(train_series, order=(1,0,2))
             arma_fit = arma_model.fit()
 
@@ -136,10 +138,10 @@ if __name__ == '__main__':
             val_data['residual']   = val_resid_full
             test_data['residual']  = test_resid_full
 
+            # Just for checking the shape is correct
             corr = train_data[['log_diff_volume','log_return','relative_open','relative_high','relative_low','relative_close','residual']].corr()['residual']
             print("[DEBUG] Correlation of residual with features:")
             print(corr)
-
             temp_dataset = ResidualDataset(train_data, dt.datetime(2022,9,30), dt.datetime(2023,5,8), hyperparams.sequence_length)
             sample_features, sample_target = temp_dataset[0]
             print(f"[DEBUG] Sample feature shape: {sample_features.shape}")
@@ -182,12 +184,7 @@ if __name__ == '__main__':
             val_metrics, val_eval     = evaluate(model, val_loader, device, metrics, hyperparams)
             test_metrics, test_eval   = evaluate(model, test_loader, device, metrics, hyperparams)
 
-            # ADDED TO SAVE
-            state_dict_path = f'lstm_model_run{i}_state_dict.pt'
-            torch.save(model.state_dict(), state_dict_path)
-            print(f"Saved model state_dict to {state_dict_path}")
-
-    # EDITED Print results
+    # Print results
     print("\n[INFO] Test Metrics Summary:")
     for metric, value in test_metrics.items():
         print(f"  {metric.upper()}: {value:.6f}")
@@ -228,11 +225,10 @@ df_hybrid = pd.DataFrame({
     "hybrid_forecast_diff": hybrid_forecast_diff # final hybrid prediction (log diff)
 })
 
-# Save CSV
+# Save CSV for checking; verified it matches the other armadata and arma csv files
 df_hybrid.to_csv('test_forecast_analysis.csv', index=False)
 print(f"[INFO] CSV saved successfully to test_forecast_analysis.csv")
 
-# ------------------- PLOT RESULTS (with timestamps) -------------------
 plt.figure(figsize=(12, 6))
 plt.plot(timestamps, test_diff, label='Actual Test Diff', color='blue')
 plt.plot(timestamps, arma_test_pred, label='ARMA Forecast', color='red', linestyle='--')
