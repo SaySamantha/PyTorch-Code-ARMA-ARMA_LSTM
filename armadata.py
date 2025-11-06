@@ -67,8 +67,8 @@ class ARMAVolumeDataset:
             'relative_close': processed_data['relative_close']
         })
     
-# This file will get overwritten later by the test dataset when the ARMAVolumeDataset is called
-# Created check that log_volume and log_diff_volume are correct
+# This file will get overwritten later by the test dataset when ARMAVolumeDataset is called
+# Created to check that log_volume and log_diff_volume are correct
 if __name__ == "__main__":
     dataset = ARMAVolumeDataset(start_date='2022-09-30', end_date='2023-09-30')
     processed = dataset.process_data()
