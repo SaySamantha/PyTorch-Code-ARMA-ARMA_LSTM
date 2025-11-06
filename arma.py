@@ -28,6 +28,7 @@ test_series  = pd.Series(test_diff, index=pd.RangeIndex(start=len(train_series),
 log_start = train_val_data['log_volume'].iloc[-1]
 log_start_time = train_val_data['timestamp'].iloc[-1]
 
+# Sanity check for reversing log_diff to log values
 print(f"[INFO] log_start: {log_start:.6f} at {log_start_time}")
 
 model = ARIMA(train_series, order=(1, 0, 2))
